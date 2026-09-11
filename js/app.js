@@ -373,6 +373,29 @@ function terapkanIdentitasAplikasi() {
   const nama = AppState.config.appName || 'InvoisKu';
   $('brandName').textContent = nama;
   document.title = nama + ' — Invoice Generator';
+  terapkanFavicon();
+}
+
+/**
+ * Perbaikan: Favicon — otomatis memakai Logo Perusahaan (Pengaturan → Logo Perusahaan).
+ * Kalau logo belum diunggah, tampilkan lencana inisial (gaya sama seperti di lembar invoice)
+ * supaya tab browser tidak kosong. Dipanggil ulang setiap logo diunggah/diganti/dihapus,
+ * sehingga favicon selalu mengikuti logo terbaru tanpa perlu reload manual.
+ */
+function terapkanFavicon() {
+  const cfg = AppState.config || {};
+  const el = $('appFavicon');
+  if (!el) return;
+  if (cfg.logoUrl) {
+    el.href = cfg.logoUrl;
+  } else {
+    const inisial = String(cfg.namaPerusahaan || cfg.appName || 'IK').trim().substring(0, 2).toUpperCase();
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">' +
+      '<circle cx="32" cy="32" r="32" fill="#00AEEF"/>' +
+      '<text x="32" y="41" font-family="Arial, sans-serif" font-size="26" font-weight="700" ' +
+      'fill="#FFFFFF" text-anchor="middle">' + inisial + '</text></svg>';
+    el.href = 'data:image/svg+xml,' + encodeURIComponent(svg);
+  }
 }
 
 function terapkanIdentitas() {
@@ -1523,16 +1546,26 @@ function kirimInvoiceWA() {
 
       const sisa = Math.max((Number(d.Total) || 0) - (Number(d.Dibayar) || 0), 0);
       const sudahLunas = String(d.Status) === 'Lunas';
+      const cfg = AppState.config || {};
 
-      let pesan = 'Halo ' + (pel.Nama || d.PelangganNama) + ',\n\n' +
-        'Berikut invoice *' + d.NoInvoice + '* dari kami.\n' +
-        'Tanggal Terbit: ' + d.TanggalTampil + '\n' +
-        'Jatuh Tempo: ' + d.JatuhTempoTampil + '\n' +
+      const rincian = (d.items || []).map(function (it) {
+        return '• ' + it.desk + ' — ' + it.qty + ' ' + (it.satuan || '') +
+          ' × Rp' + rp(it.harga);
+      }).join('\n');
+
+      let pesan = 'Halo Kak ' + (pel.Nama || d.PelangganNama) + ' 👋\n\n' +
+        'Berikut invoice dari ' + (cfg.namaPerusahaan || cfg.appName || 'InvoisKu') + ':\n' +
+        '🧾 Invoice: ' + d.NoInvoice + '\n' +
+        '📅 Terbit: ' + d.TanggalTampil + '\n\n' +
+        'Rincian:\n' + rincian + '\n' +
         (sudahLunas
-          ? 'Total Tagihan: Rp ' + rp(d.Total) + ' (LUNAS)\n'
-          : 'Total Tagihan: Rp ' + rp(sisa) + '\n') +
+          ? '💵 Total Tagihan: Rp' + rp(d.Total) + ' (LUNAS)\n'
+          : '💵 Total Tagihan: Rp' + rp(sisa) + '\n') +
         (d.PdfUrl ? '\nLihat/unduh invoice: ' + d.PdfUrl + '\n' : '') +
-        '\nTerima kasih atas kepercayaan Anda menggunakan layanan kami.';
+        '\nPembayaran dapat ditransfer ke:\n' +
+        (cfg.bankNama || '-') + ' — An. ' + (cfg.bankAtasNama || '-') + '\n' +
+        'Rek: ' + (cfg.bankRekening || '-') + '\n\n' +
+        'Terima kasih sudah berbelanja! :)';
 
       window.open('https://wa.me/' + telp + '?text=' + encodeURIComponent(pesan), '_blank');
     })
@@ -2122,6 +2155,7 @@ function hapusLogoUI() {
       .withSuccessHandler(function (res) {
         if (!res.success) { tanganiGagal(res.message); return; }
         AppState.config = res.data;
+        terapkanFavicon();
         showToast('Berhasil', 'Logo dihapus.', 'success');
         renderPengaturan();
       })
@@ -2145,6 +2179,7 @@ function unggahLogoUI() {
         selesai();
         if (!res.success) { tanganiGagal(res.message); return; }
         AppState.config.logoUrl = res.data.logoUrl;
+        terapkanFavicon();
         showToast('Berhasil', res.message, 'success');
         renderPengaturan();
       })

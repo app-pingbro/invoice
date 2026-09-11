@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="id" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>InvoisKu — Invoice Generator</title>
+
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+
+  <!-- ══════════ OVERLAY PEMUATAN AWAL ══════════ -->
+  <div id="loadingOverlay" class="loading-overlay">
+    <div class="brand-mark brand-mark-lg">
+      <span class="dot dot-c"></span><span class="dot dot-m"></span>
+      <span class="dot dot-y"></span><span class="dot dot-k"></span>
+    </div>
+    <div class="spinner-border text-cyan mt-3" role="status">
+      <span class="visually-hidden">Memuat...</span>
+    </div>
+    <p class="mt-3 text-muted-soft" id="loadingText">Menyiapkan InvoisKu…</p>
+  </div>
+
+  <!-- ══════════ HEADER ══════════ -->
+  <header id="appHeader" class="app-header" hidden>
+    <div class="header-inner">
+      <div class="d-flex align-items-center gap-2">
+        <div class="brand-mark">
+          <span class="dot dot-c"></span><span class="dot dot-m"></span>
+          <span class="dot dot-y"></span><span class="dot dot-k"></span>
+        </div>
+        <div class="lh-1">
+          <div class="brand-name" id="brandName">InvoisKu</div>
+          <div class="brand-status"><span class="pulse"></span> Sheets DB Aktif</div>
+        </div>
+      </div>
+
+      <nav class="top-nav" id="topNav" aria-label="Navigasi utama"></nav>
+
+      <div class="d-flex align-items-center gap-1">
+        <button class="icon-btn" onclick="toggleDarkMode()" id="themeBtn"
+                aria-label="Ganti mode gelap" title="Mode gelap">
+          <i class="bi bi-moon-stars"></i>
+        </button>
+        <button class="icon-btn" onclick="navigateTo('pengaturan')"
+                aria-label="Pengaturan" title="Pengaturan">
+          <i class="bi bi-gear"></i>
+        </button>
+        <div class="user-chip">
+          <div class="avatar" id="userInitial">?</div>
+          <div class="lh-1 d-none d-sm-block">
+            <div class="user-name" id="userName">—</div>
+            <div class="user-role" id="userRole">—</div>
+          </div>
+        </div>
+        <button class="icon-btn text-magenta" onclick="handleLogout()"
+                aria-label="Keluar" title="Keluar">
+          <i class="bi bi-box-arrow-right"></i>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ══════════ KONTAINER SPA ══════════ -->
+  <main id="mainContent" class="main-content">
+    <div id="app-container"></div>
+  </main>
+
+  <!-- ══════════ BOTTOM NAVIGATION BAR ══════════ -->
+  <nav id="bottomNav" class="bottom-nav" aria-label="Navigasi bawah" hidden></nav>
+
+  <!-- ══════════ MODAL: PRATINJAU / CETAK PDF ══════════ -->
+  <div class="modal fade" id="previewModal" tabindex="-1" aria-labelledby="previewModalLabel">
+    <div class="modal-dialog modal-dialog-centered modal-lg modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="previewModalLabel">
+            <i class="bi bi-eye text-cyan"></i> Pratinjau Lembar A4
+          </h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button>
+        </div>
+        <div class="modal-body preview-body">
+          <div id="previewContent" class="paper-sheet"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-key" data-bs-dismiss="modal"
+                  onclick="AppState.invoiceAktif=null;AppState.gabunganAktif=null;AppState.previewMode=null;">
+            <i class="bi bi-arrow-left"></i> Kembali
+          </button>
+          <button type="button" class="btn btn-outline-key" id="btnCetakPrinter" onclick="cetakKePrinter()">
+            <i class="bi bi-printer-fill"></i> Cetak ke Printer
+          </button>
+          <a id="previewDownloadBtn" class="btn btn-key d-none" href="#" target="_blank" rel="noopener">
+            <i class="bi bi-download"></i> Unduh JPG
+          </a>
+          <button type="button" class="btn btn-cyan" id="previewPrintBtn" onclick="cetakDariPratinjau()">
+            <i class="bi bi-image"></i> Simpan JPG ke Drive
+          </button>
+          <button type="button" class="btn btn-whatsapp" id="btnKirimWA" onclick="kirimInvoiceWA()">
+            <i class="bi bi-whatsapp"></i> Kirim ke WhatsApp
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════ MODAL: GABUNG INVOICE (TAGIHAN GABUNGAN) ══════════ -->
+  <div class="modal fade" id="gabungModal" tabindex="-1" aria-labelledby="gabungModalLabel">
+    <div class="modal-dialog modal-dialog-centered modal-lg modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="gabungModalLabel">
+            <i class="bi bi-collection text-cyan"></i> Gabung Invoice
+          </h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button>
+        </div>
+        <div class="modal-body">
+          <label class="form-label" for="gabungPelanggan">Pelanggan (hanya yang memiliki lebih dari satu invoice)</label>
+          <select class="form-select mb-3" id="gabungPelanggan" onchange="gambarDaftarInvoiceGabung()"></select>
+          <label class="form-label mb-2">Pilih invoice yang ingin digabungkan menjadi satu tagihan</label>
+          <div id="gabungDaftarInvoice"></div>
+          <div class="alert-inline mt-3 d-none" id="gabungError"></div>
+          <p class="text-muted-soft mt-3 mb-0" style="font-size:11px;">
+            <i class="bi bi-shield-check"></i> Invoice asli tidak akan diubah atau dihapus. Tagihan gabungan
+            hanya dipakai untuk memudahkan penagihan.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-key" data-bs-dismiss="modal">
+            <i class="bi bi-x-lg"></i> Batal
+          </button>
+          <button type="button" class="btn btn-cyan" id="btnPratinjauGabung" onclick="prosesPratinjauGabungan()">
+            <i class="bi bi-eye"></i> Pratinjau
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════ MODAL: KONFIRMASI ══════════ -->
+  <div class="modal fade" id="confirmModal" tabindex="-1" aria-labelledby="confirmModalLabel">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="confirmModalLabel">Konfirmasi</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button>
+        </div>
+        <div class="modal-body"><div id="confirmMessage">Anda yakin?</div></div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-key" data-bs-dismiss="modal">Batal</button>
+          <button type="button" class="btn btn-magenta" id="confirmOkBtn">Ya, Lanjutkan</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════ MODAL: FORM PELANGGAN ══════════ -->
+  <div class="modal fade" id="pelangganModal" tabindex="-1" aria-labelledby="pelangganModalLabel">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="pelangganModalLabel">
+            <i class="bi bi-person-plus text-cyan"></i> Pelanggan Baru
+          </h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="pelID">
+          <div class="mb-3">
+            <label class="form-label" for="pelNama">Nama Pelanggan <span class="req">*</span></label>
+            <input type="text" class="form-control" id="pelNama" placeholder="Nama pelanggan atau perusahaan">
+          </div>
+          <div class="mb-3">
+            <label class="form-label" for="pelTelepon">No. WhatsApp / Telepon</label>
+            <input type="tel" class="form-control" id="pelTelepon" placeholder="+62 812-3456-7890">
+          </div>
+          <div class="mb-3">
+            <label class="form-label" for="pelAlamat">Alamat Lengkap Penagihan</label>
+            <textarea class="form-control" id="pelAlamat" rows="2"
+                      placeholder="Jalan, kota, kode pos"></textarea>
+          </div>
+          <div class="mb-3">
+            <label class="form-label" for="pelEmail">Email Tagihan</label>
+            <input type="email" class="form-control" id="pelEmail" placeholder="email@domain.com">
+          </div>
+          <div>
+            <label class="form-label" for="pelCatatan">Catatan Internal</label>
+            <input type="text" class="form-control" id="pelCatatan" placeholder="Opsional">
+          </div>
+          <div class="alert-inline mt-3 d-none" id="pelError"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-key" data-bs-dismiss="modal">Batal</button>
+          <button type="button" class="btn btn-cyan" id="btnSimpanPelanggan" onclick="submitPelanggan()">
+            <i class="bi bi-check-lg"></i> Simpan Pelanggan
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════ MODAL: KELOLA SATUAN ══════════ -->
+  <div class="modal fade" id="satuanModal" tabindex="-1" aria-labelledby="satuanModalLabel">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="satuanModalLabel">
+            <i class="bi bi-tags text-cyan"></i> Kelola Kategori Satuan
+          </h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button>
+        </div>
+        <div class="modal-body">
+          <label class="form-label" for="satuanBaru">Tambah kategori baru</label>
+          <div class="input-group mb-3">
+            <input type="text" class="form-control" id="satuanBaru"
+                   placeholder="Contoh: Roll, Lembar, Set" maxlength="20">
+            <button class="btn btn-cyan" type="button" onclick="tambahSatuan()">
+              <i class="bi bi-plus-lg"></i> Tambah
+            </button>
+          </div>
+          <div class="form-label">Kategori tersimpan</div>
+          <div id="daftarSatuan" class="satuan-wrap"></div>
+          <p class="text-muted-soft mt-2 mb-0" style="font-size:11px;">
+            Perubahan langsung tersimpan ke Google Sheets dan berlaku untuk semua pengguna.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-key" data-bs-dismiss="modal">Selesai</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════ TOAST ══════════ -->
+  <div class="toast-container position-fixed p-3" id="toastContainer">
+    <div id="appToast" class="toast align-items-center" role="alert" aria-live="polite" aria-atomic="true">
+      <div class="toast-header">
+        <i class="bi bi-info-circle me-2" id="toastIcon"></i>
+        <strong class="me-auto" id="toastTitle">Notifikasi</strong>
+        <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Tutup"></button>
+      </div>
+      <div class="toast-body" id="toastBody"></div>
+    </div>
+  </div>
+
+  <!-- ══════════ AREA CETAK LANGSUNG KE PRINTER ══════════
+       Hanya elemen ini yang tampil saat window.print() dipanggil. -->
+  <div id="printArea" aria-hidden="true"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+
+
+  <script src="js/config.js"></script>
+  <script src="js/api-shim.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

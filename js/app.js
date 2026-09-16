@@ -13,6 +13,18 @@ const KUNCI_TOKEN = 'invoisku-token';
 const KUNCI_DRAFT = 'invoisku-draft';
 const KUNCI_TEMA  = 'invoisku-theme';
 
+/**
+ * Perbaikan: navigasi antar menu (Buat Invoice/Riwayat Invoice/Pelanggan/Laporan)
+ * jangan memanggil API berulang-ulang hanya karena pengguna berpindah-pindah menu.
+ * Selama cache halaman masih berumur di bawah CACHE_TTL_MS, kunjungan ulang ke
+ * menu yang sama HANYA menampilkan data cache (0 panggilan server). Begitu lewat
+ * masa berlaku ini, data disegarkan diam-diam di latar (tanpa layar loading) —
+ * jadi data tetap akurat & konsisten, tapi tidak ada request percuma setiap klik.
+ * Cache tetap dipaksa kosong (null) segera setelah aksi yang benar-benar mengubah
+ * data (simpan/hapus/ubah status/dll) supaya perubahan tersebut selalu terlihat.
+ */
+const CACHE_TTL_MS = 60000; // 60 detik
+
 const AppState = {
   halaman: null,
   token: null,
@@ -30,9 +42,21 @@ const AppState = {
   gabungKandidat: [],    // daftar pelanggan (>1 invoice) untuk fitur Gabung Invoice
   cacheInvoice: null,   // hasil terakhir Riwayat Invoice (tampil instan)
   cacheLaporan: null,   // hasil terakhir Laporan (tampil instan, disegarkan di latar)
+  cacheWaktu: {},        // { invoice, pelanggan, laporan } -> timestamp cache terakhir disegarkan
   filter: { keyword: '', status: 'Semua' },
-  chart: {}
+  chart: {},
+  filterProduk: { periode: 'bulan', mulai: '', akhir: '' }, // Laporan Penggunaan Produk/Jasa
+  cacheProduk: null
 };
+
+/** Cache dianggap masih valid (tidak perlu disegarkan) kalau umurnya belum lewat CACHE_TTL_MS. */
+function cacheMasihValid(kunci) {
+  const t = AppState.cacheWaktu[kunci];
+  return !!t && (Date.now() - t) < CACHE_TTL_MS;
+}
+function tandaiCacheSegar(kunci) {
+  AppState.cacheWaktu[kunci] = Date.now();
+}
 
 const MENU = {
   Owner: [
@@ -1061,10 +1085,12 @@ function renderRiwayatInvoice() {
 
   gambarChipStatus();
 
-  // Tampilkan cache lebih dulu agar terasa instan, lalu segarkan di latar
+  // Tampilkan cache lebih dulu agar terasa instan. Selama cache belum kedaluwarsa
+  // (CACHE_TTL_MS), TIDAK ada panggilan server sama sekali saat menu ini dibuka
+  // ulang — hanya disegarkan diam-diam di latar kalau memang sudah waktunya.
   if (AppState.cacheInvoice) {
     gambarRiwayat(AppState.cacheInvoice);
-    muatRiwayat(true);
+    if (!cacheMasihValid('invoice')) muatRiwayat(true);
   } else {
     $('listInvoice').innerHTML = skeleton(3);
     muatRiwayat(false);
@@ -1088,7 +1114,10 @@ function gambarChipStatus() {
 function setFilterStatus(status) {
   AppState.filter.status = status;
   gambarChipStatus();
-  $('listInvoice').innerHTML = skeleton(2);
+  // Perbaikan: jangan mengosongkan daftar ke layar loading — biarkan daftar lama
+  // tetap tampil sampai hasil filter baru datang, lalu langsung ditimpa. Filter
+  // tetap butuh data terbaru dari server (akurasi terjaga), hanya saja tanpa
+  // "flash" loading yang mengganggu setiap kali chip status diklik.
   muatRiwayat(false);
 }
 
@@ -1112,6 +1141,7 @@ function muatRiwayat(diamDiam) {
         return;
       }
       AppState.cacheInvoice = res.data;
+      tandaiCacheSegar('invoice');
       gambarRiwayat(res.data);
     })
     .withFailureHandler(function (err) {
@@ -1548,19 +1578,23 @@ function kirimInvoiceWA() {
       const sudahLunas = String(d.Status) === 'Lunas';
       const cfg = AppState.config || {};
 
+      // Perbaikan #4: format pesan disusun sebagai teks polos (bukan HTML), memakai
+      // hanya emoji standar & format *bold* bawaan WhatsApp (tanda bintang tunggal)
+      // supaya tetap terbaca normal & rapi baik di WhatsApp Web maupun aplikasi HP.
+      // Rincian tiap item dipecah 2 baris (nama produk, lalu qty × harga) — lebih
+      // mudah dibaca daripada satu baris panjang bertanda bullet.
       const rincian = (d.items || []).map(function (it) {
-        return '• ' + it.desk + ' — ' + it.qty + ' ' + (it.satuan || '') +
-          ' × Rp' + rp(it.harga);
+        return '*' + it.desk + '*\n' + it.qty + ' ' + (it.satuan || '') + ' × Rp' + rp(it.harga);
       }).join('\n');
 
-      let pesan = 'Halo Kak ' + (pel.Nama || d.PelangganNama) + ' 👋\n\n' +
+      let pesan = 'Halo Kak ' + (pel.Nama || d.PelangganNama) + ' 👋\n' +
         'Berikut invoice dari ' + (cfg.namaPerusahaan || cfg.appName || 'InvoisKu') + ':\n' +
-        '🧾 Invoice: ' + d.NoInvoice + '\n' +
+        '🧾 Invoice: *' + d.NoInvoice + '*\n' +
         '📅 Terbit: ' + d.TanggalTampil + '\n\n' +
-        'Rincian:\n' + rincian + '\n' +
+        'Rincian Tagihan:\n' + rincian + '\n\n' +
         (sudahLunas
-          ? '💵 Total Tagihan: Rp' + rp(d.Total) + ' (LUNAS)\n'
-          : '💵 Total Tagihan: Rp' + rp(sisa) + '\n') +
+          ? '💵 Total Tagihan: *Rp' + rp(d.Total) + '* (LUNAS)\n'
+          : '💵 Total Tagihan: *Rp' + rp(sisa) + '*\n') +
         (d.PdfUrl ? '\nLihat/unduh invoice: ' + d.PdfUrl + '\n' : '') +
         '\nPembayaran dapat ditransfer ke:\n' +
         (cfg.bankNama || '-') + ' — An. ' + (cfg.bankAtasNama || '-') + '\n' +
@@ -1625,11 +1659,16 @@ function renderPelanggan() {
 
   '<div id="listPelanggan"></div>';
 
-  // Tampilkan data yang sudah ada di memori supaya tidak terasa menggantung
-  if (AppState.pelanggan.length) gambarPelanggan(AppState.pelanggan);
-  else $('listPelanggan').innerHTML = skeleton(3);
-
-  muatPelanggan();
+  // Tampilkan data yang sudah ada di memori supaya tidak terasa menggantung.
+  // Selama cache belum kedaluwarsa, membuka ulang menu ini TIDAK memanggil
+  // server sama sekali — hanya disegarkan kalau memang sudah waktunya.
+  if (AppState.pelanggan.length) {
+    gambarPelanggan(AppState.pelanggan);
+    if (!cacheMasihValid('pelanggan')) muatPelanggan();
+  } else {
+    $('listPelanggan').innerHTML = skeleton(3);
+    muatPelanggan();
+  }
 }
 
 let timerCariPel;
@@ -1649,7 +1688,7 @@ function muatPelanggan() {
         }
         return;
       }
-      if (!kata) AppState.pelanggan = res.data;   // segarkan cache dropdown invoice
+      if (!kata) { AppState.pelanggan = res.data; tandaiCacheSegar('pelanggan'); } // segarkan cache dropdown invoice
       gambarPelanggan(res.data);
     })
     .withFailureHandler(function (err) {
@@ -1821,17 +1860,23 @@ function renderLaporan() {
     '<button class="btn btn-ghost btn-sm" id="btnSegarkanLaporan" onclick="muatLaporan(false)">' +
       '<i class="bi bi-arrow-clockwise"></i> Segarkan</button>' +
   '</div>' +
-  '<div id="isiLaporan"></div>';
+  '<div id="isiLaporan"></div>' +
+  '<div id="isiLaporanProduk" class="mt-3"></div>';
 
-  // Tampilkan hasil terakhir dulu supaya halaman langsung terisi,
-  // lalu ambil data terbaru diam-diam di latar belakang.
+  // Tampilkan hasil terakhir dulu supaya halaman langsung terisi. Selama cache
+  // belum kedaluwarsa, TIDAK ada panggilan server saat menu ini dibuka ulang;
+  // tombol "Segarkan" tetap selalu memuat ulang langsung kapan pun diklik.
   if (AppState.cacheLaporan) {
     gambarLaporan(AppState.cacheLaporan);
-    muatLaporan(true);
+    if (!cacheMasihValid('laporan')) muatLaporan(true);
   } else {
     $('isiLaporan').innerHTML = skeleton(4);
     muatLaporan(false);
   }
+
+  // Perbaikan (Ronde 4): Laporan Penggunaan Produk/Jasa — bagian BARU, terpisah
+  // sepenuhnya dari getLaporanData()/gambarLaporan() di atas.
+  renderLaporanProduk();
 }
 
 function muatLaporan(diamDiam) {
@@ -1847,6 +1892,7 @@ function muatLaporan(diamDiam) {
         return;
       }
       AppState.cacheLaporan = res.data;
+      tandaiCacheSegar('laporan');
       gambarLaporan(res.data);
     })
     .withFailureHandler(function (err) {
@@ -1976,6 +2022,142 @@ function gambarChartStatus(dist) {
       }
     }
   });
+}
+
+/**
+ * Perbaikan (Ronde 4): Laporan Penggunaan Produk/Jasa berdasarkan Satuan.
+ * Bagian ini BARU dan berdiri sendiri — tidak mengubah/menyentuh gambarLaporan(),
+ * muatLaporan(), atau isi Laporan Penjualan & Piutang yang sudah ada di atas.
+ */
+function renderLaporanProduk() {
+  const wadah = $('isiLaporanProduk');
+  if (!wadah) return;
+
+  const f = AppState.filterProduk;
+  const opsiPeriode = [
+    { id: 'hari',   label: 'Hari Ini' },
+    { id: 'minggu', label: 'Minggu Ini' },
+    { id: 'bulan',  label: 'Bulan Ini' },
+    { id: 'semua',  label: 'Semua' },
+    { id: 'custom', label: 'Periode Tertentu' }
+  ];
+
+  wadah.innerHTML =
+  '<div class="card-x"><div class="card-x-head">' +
+    '<h2><i class="bi bi-boxes text-cyan"></i> Laporan Penggunaan Produk/Jasa</h2>' +
+    '<span class="text-muted-soft" style="font-size:11px;">Total Qty per produk, dikelompokkan per satuan</span>' +
+  '</div>' +
+  '<div class="card-x-body">' +
+    '<div class="chip-row mb-2" id="chipPeriodeProduk">' +
+      opsiPeriode.map(function (o) {
+        return '<button class="chip' + (f.periode === o.id ? ' active' : '') + '" ' +
+          'onclick="setPeriodeProduk(\'' + o.id + '\')">' + o.label + '</button>';
+      }).join('') +
+    '</div>' +
+    (f.periode === 'custom'
+      ? '<div class="row g-2 mb-2">' +
+          '<div class="col-6 col-md-3">' +
+            '<label class="form-label">Dari Tanggal</label>' +
+            '<input type="date" class="form-control form-control-sm" id="produkMulai" value="' + esc(f.mulai) + '">' +
+          '</div>' +
+          '<div class="col-6 col-md-3">' +
+            '<label class="form-label">Sampai Tanggal</label>' +
+            '<input type="date" class="form-control form-control-sm" id="produkAkhir" value="' + esc(f.akhir) + '">' +
+          '</div>' +
+          '<div class="col-12 col-md-3 d-flex align-items-end">' +
+            '<button class="btn btn-cyan btn-sm w-100" onclick="terapkanPeriodeCustomProduk()">Terapkan</button>' +
+          '</div>' +
+        '</div>'
+      : '') +
+    '<div id="listLaporanProduk"></div>' +
+  '</div></div>';
+
+  // Tampilkan cache dulu (kalau ada & masih untuk periode yang sama) supaya instan,
+  // baru disegarkan di latar bila sudah kedaluwarsa — sama seperti bagian Laporan lain.
+  if (AppState.cacheProduk) {
+    gambarLaporanProduk(AppState.cacheProduk);
+    if (!cacheMasihValid('produk')) muatLaporanProduk(true);
+  } else {
+    $('listLaporanProduk').innerHTML = skeleton(2);
+    muatLaporanProduk(false);
+  }
+}
+
+function setPeriodeProduk(periode) {
+  AppState.filterProduk.periode = periode;
+  AppState.cacheProduk = null; // ganti periode = data lama tidak relevan lagi
+  renderLaporanProduk();
+}
+
+function terapkanPeriodeCustomProduk() {
+  const mulai = $('produkMulai') ? $('produkMulai').value : '';
+  const akhir = $('produkAkhir') ? $('produkAkhir').value : '';
+  if (!mulai || !akhir) {
+    showToast('Peringatan', 'Isi tanggal mulai dan tanggal akhir terlebih dahulu.', 'warning');
+    return;
+  }
+  if (mulai > akhir) {
+    showToast('Peringatan', 'Tanggal mulai tidak boleh setelah tanggal akhir.', 'warning');
+    return;
+  }
+  AppState.filterProduk.mulai = mulai;
+  AppState.filterProduk.akhir = akhir;
+  AppState.cacheProduk = null;
+  muatLaporanProduk(false);
+}
+
+function muatLaporanProduk(diamDiam) {
+  const f = AppState.filterProduk;
+  if (!diamDiam) $('listLaporanProduk').innerHTML = skeleton(2);
+
+  google.script.run
+    .withSuccessHandler(function (res) {
+      if (!res.success) {
+        if (!tanganiGagal(res.message) && !diamDiam) {
+          tampilkanGalat('listLaporanProduk', res.message, 'muatLaporanProduk(false)');
+        }
+        return;
+      }
+      AppState.cacheProduk = res.data;
+      tandaiCacheSegar('produk');
+      gambarLaporanProduk(res.data);
+    })
+    .withFailureHandler(function (err) {
+      if (!diamDiam) {
+        tampilkanGalat('listLaporanProduk', 'Gagal memuat laporan penggunaan: ' + err.message,
+          'muatLaporanProduk(false)');
+      }
+    })
+    .getLaporanPenggunaanProduk(AppState.token, f.periode, f.mulai, f.akhir);
+}
+
+/** Format Qty laporan penggunaan — beda dari rp() karena TIDAK dibulatkan ke bilangan bulat (qty bisa desimal, mis. 1.5 Meter). */
+function formatQty(n) {
+  const bulat = Math.round((Number(n) || 0) * 100) / 100; // buang sisa presisi floating-point
+  return bulat.toString().replace('.', ',');
+}
+
+function gambarLaporanProduk(d) {
+  const wadah = $('listLaporanProduk');
+  if (!wadah) return;
+
+  const keterangan = (d.mulaiTampil && d.akhirTampil)
+    ? '<div class="inv-meta mb-2">Periode: ' + esc(d.mulaiTampil) + ' – ' + esc(d.akhirTampil) + '</div>'
+    : '';
+
+  if (!d.list || !d.list.length) {
+    wadah.innerHTML = keterangan + '<div class="empty-state py-3">' +
+      '<i class="bi bi-inbox"></i>Belum ada penggunaan produk/jasa pada periode ini.</div>';
+    return;
+  }
+
+  wadah.innerHTML = keterangan +
+    '<table class="table-x"><thead><tr><th>Produk/Jasa</th><th class="num">Total Penggunaan</th></tr></thead><tbody>' +
+    d.list.map(function (it) {
+      return '<tr><td>' + esc(it.produk) + '</td>' +
+        '<td class="num"><b>' + formatQty(it.totalQty) + ' ' + esc(it.satuan) + '</b></td></tr>';
+    }).join('') +
+    '</tbody></table>';
 }
 
 

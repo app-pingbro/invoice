@@ -66,6 +66,90 @@ function tunda(ms) {
   return new Promise(function (resolve) { setTimeout(resolve, ms); });
 }
 
+/* ============================================================
+ * SCALE TURBO (Phase 1) — tambahan di sisi browser
+ * ------------------------------------------------------------
+ * 1. Perf      : catat waktu setiap panggilan. Ketik Perf.table() atau
+ *                Perf.summary() di Console browser untuk melihatnya.
+ * 2. Dedupe    : permintaan BACA yang identik dan sedang berjalan cukup dikirim
+ *                sekali; pemanggil kedua menumpang hasilnya (salinan sendiri).
+ *                Setiap aksi TULIS menaikkan "epoch" sehingga baca sesudah simpan
+ *                tidak pernah menumpang baca lama (data basi).
+ * 3. Warmup    : saat layar login tampil (belum ada token), server diminta
+ *                memanaskan cache (GET ?w=pub, maks 1x per 4 menit) supaya
+ *                data sudah siap begitu login selesai.
+ * Kompatibel dengan backend lama: field ms/v yang belum ada ditampilkan "-",
+ * dan GET ?w=pub ke backend lama hanya dijawab pesan "API aktif".
+ * ============================================================ */
+const Perf = {
+  log: [],
+  catat: function (action, t0, json, dariDedupe) {
+    const total = Math.round(performance.now() - t0);
+    const server = json && typeof json.ms === 'number' ? json.ms : null;
+    this.log.push({ waktu: new Date().toLocaleTimeString('id-ID'), aksi: action, total_ms: total,
+      server_ms: server === null ? '-' : server, jaringan_ms: server === null ? '-' : Math.max(total - server, 0),
+      dedupe: dariDedupe ? '✓' : '', versi: (json && json.v) || '-' });
+    if (this.log.length > 200) this.log.shift();
+  },
+  table: function () { console.table(this.log); },
+  summary: function () {
+    const per = {};
+    this.log.forEach(function (r) {
+      const p = per[r.aksi] || (per[r.aksi] = { panggilan: 0, total: 0, server: 0, nServer: 0 });
+      p.panggilan++; p.total += r.total_ms;
+      if (r.server_ms !== '-') { p.server += r.server_ms; p.nServer++; }
+    });
+    const out = {};
+    Object.keys(per).forEach(function (k) {
+      const p = per[k];
+      out[k] = { panggilan: p.panggilan, rata_total_ms: Math.round(p.total / p.panggilan),
+        rata_server_ms: p.nServer ? Math.round(p.server / p.nServer) : '-' };
+    });
+    console.table(out);
+  }
+};
+window.Perf = Perf;
+
+const _bacaBerjalan = {};
+let _epochTulis = 0;
+
+function salinJson(x) {
+  try { return JSON.parse(JSON.stringify(x)); } catch (e) { return x; }
+}
+
+/** Pintu semua panggilan: dedupe baca + pengukuran. */
+function panggilApiTurbo(namaAction, args) {
+  const t0 = performance.now();
+  if (!amanDicobaUlang(namaAction)) {
+    _epochTulis++;
+    return panggilApi(namaAction, args, 0).then(function (json) { Perf.catat(namaAction, t0, json, false); return json; });
+  }
+  let kunci;
+  try { kunci = _epochTulis + '|' + namaAction + '|' + JSON.stringify(args); } catch (e) { kunci = null; }
+  if (kunci && _bacaBerjalan[kunci]) {
+    return _bacaBerjalan[kunci].then(function (json) { Perf.catat(namaAction, t0, json, true); return salinJson(json); });
+  }
+  const janji = panggilApi(namaAction, args, 0);
+  if (kunci) {
+    _bacaBerjalan[kunci] = janji;
+    const hapus = function () { delete _bacaBerjalan[kunci]; };
+    janji.then(hapus, hapus);
+  }
+  return janji.then(function (json) { Perf.catat(namaAction, t0, json, false); return salinJson(json); });
+}
+
+/** Panaskan cache server saat layar login (belum ada token). Tidak mengirim data apa pun. */
+(function warmUpServer() {
+  try {
+    if (!API_URL || API_URL === API_URL_PLACEHOLDER) return;
+    if (localStorage.getItem('invoisku-token')) return;          // sudah login: bootstrap sendiri yang memanaskan
+    const terakhir = Number(sessionStorage.getItem('invoisku-warm') || 0);
+    if (Date.now() - terakhir < 4 * 60 * 1000) return;
+    sessionStorage.setItem('invoisku-warm', String(Date.now()));
+    fetch(API_URL + '?w=pub', { method: 'GET', mode: 'no-cors' }).catch(function () {});
+  } catch (e) { /* storage diblokir — lewati warmup */ }
+})();
+
 /** Kirim satu panggilan ke API, dengan percobaan-ulang otomatis untuk action pembaca data. */
 function panggilApi(namaAction, args, percobaanKe) {
   return fetch(API_URL, {
@@ -123,7 +207,7 @@ function buatRunnerGoogleScript() {
           return proxy;
         }
 
-        panggilApi(prop, args, 0)
+        panggilApiTurbo(prop, args)
           .then(function (json) { onSukses(json); })
           .catch(function (err) {
             onGagal({ message: (err && err.message) ? err.message : String(err) });

@@ -617,12 +617,11 @@ function renderBuatInvoice(dataEdit) {
 
       '<div class="card-x mb-3"><div class="card-x-head">' +
         '<h2><i class="bi bi-person-badge text-cyan"></i> Informasi Pelanggan</h2>' +
-        '<button type="button" class="btn btn-ghost btn-sm" onclick="bukaModalPelanggan()">' +
+        '<button type="button" class="btn btn-ghost btn-sm" onclick="bukaPelangganCepat()">' +   // v3.3: form ringkas
           '<i class="bi bi-plus-lg"></i> Pelanggan Baru</button></div>' +
         '<div class="card-x-body">' +
-          '<label class="form-label" for="invPelanggan">Pilih Pelanggan Terdaftar <span class="req">*</span></label>' +
-          '<select class="form-select" id="invPelanggan" onchange="tampilkanInfoPelanggan();simpanDraft()">' +
-            '<option value="">— Pilih pelanggan —</option>' + opsiPelanggan + '</select>' +
+          '<label class="form-label" for="invPelangganCari">Pilih Pelanggan Terdaftar <span class="req">*</span></label>' +
+          htmlPilihPelanggan(d.pelangganId) +   // v3.3: bisa diketik untuk mencari
           '<div id="infoPelanggan" class="mt-3"></div>' +
         '</div>' +
       '</div>' +
@@ -952,10 +951,11 @@ function tampilkanInfoPelanggan() {
 }
 
 function submitInvoice(aksi) {
+  if (AppState.sedangSimpanInvoice) return;   // v3.3: klik ke-2/ke-3 saat masih menyimpan diabaikan
   serapForm();
   const d = AppState.draft;
 
-  if (!d.pelangganId) { showToast('Peringatan', 'Pelanggan wajib dipilih.', 'warning'); $('invPelanggan').focus(); return; }
+  if (!d.pelangganId) { showToast('Peringatan', 'Pelanggan wajib dipilih — ketik nama lalu klik pelanggannya.', 'warning'); $('invPelangganCari').focus(); return; }
   if (!d.tanggal || !d.jatuhTempo) { showToast('Peringatan', 'Tanggal terbit dan jatuh tempo wajib diisi.', 'warning'); return; }
   const items = d.items.filter(function (it) { return String(it.desk).trim() !== ''; });
   if (!items.length) { showToast('Peringatan', 'Isi minimal satu baris item.', 'warning'); return; }
@@ -967,9 +967,20 @@ function submitInvoice(aksi) {
     PajakPersen: d.pajakPersen, Deposit: d.deposit,
     CatatanPembayaran: d.catatan
   };
+  // v3.3: kunci unik per isi invoice BARU. Bila permintaan terkirim ulang (klik ganda, koneksi
+  // putus), server mengenali kunci yang sama dan tidak membuat invoice kedua.
+  if (!d.editId) payload.IdemKey = kunciIdemInvoice(d, payload);
 
+  AppState.sedangSimpanInvoice = true;
   const btn = aksi === 'cetak' ? $('btnSimpanCetak') : $('btnSimpanSaja');
-  const selesai = tombolSibuk(btn, 'Menyimpan...');
+  const btnLain = aksi === 'cetak' ? $('btnSimpanSaja') : $('btnSimpanCetak');
+  const selesaiTombol = tombolSibuk(btn, 'Menyimpan...');
+  if (btnLain) btnLain.disabled = true;
+  const selesai = function () {
+    AppState.sedangSimpanInvoice = false;
+    selesaiTombol();
+    if (btnLain && document.body.contains(btnLain)) btnLain.disabled = false;
+  };
 
   google.script.run
     .withSuccessHandler(function (res) {
@@ -1122,6 +1133,7 @@ function gambarChipStatus() {
 function setFilterStatus(status) {
   AppState.filter.status = status;
   gambarChipStatus();
+  tampilkanFilterInstan();   // v3.3: daftar langsung sesuai status yang dipilih, lalu dipastikan ke server
   // Perbaikan: jangan mengosongkan daftar ke layar loading — biarkan daftar lama
   // tetap tampil sampai hasil filter baru datang, lalu langsung ditimpa. Filter
   // tetap butuh data terbaru dari server (akurasi terjaga), hanya saja tanpa
@@ -1139,9 +1151,14 @@ function cariInvoiceDitunda() {
 }
 
 /** Satu panggilan server saja: daftar + hitungan chip + KPI */
+let _seqRiwayat = 0;   // v3.3
 function muatRiwayat(diamDiam) {
+  const seq = ++_seqRiwayat;
+  const kunciFilter = kunciFilterRiwayat();
   google.script.run
     .withSuccessHandler(function (res) {
+      // v3.3: abaikan jawaban permintaan lama (mis. chip Lunas lalu cepat diganti Belum Lunas)
+      if (seq !== _seqRiwayat || kunciFilter !== kunciFilterRiwayat()) return;
       if (!res.success) {
         if (!tanganiGagal(res.message) && !diamDiam) {
           tampilkanGalat('listInvoice', res.message, 'muatRiwayat(false)');
@@ -1150,6 +1167,8 @@ function muatRiwayat(diamDiam) {
       }
       AppState.cacheInvoice = res.data;
       tandaiCacheSegar('invoice');
+      AppState.cacheRiwayatFilter = AppState.cacheRiwayatFilter || {};
+      AppState.cacheRiwayatFilter[kunciFilter] = res.data;   // v3.3
       if (filterRiwayatBawaan()) simpanCacheInstan('invoice', res.data);   // v3.2.2
       gambarRiwayat(res.data);
     })
@@ -1263,6 +1282,7 @@ function ubahStatus(id, statusBaru) {
         showToast('Berhasil', res.message, 'success');
         AppState.cacheInvoice = null;
         AppState.cacheLaporan = null;
+        AppState.cacheRiwayatFilter = {};   // v3.3: semua hasil filter lama tidak berlaku
         muatRiwayat(false);
       })
       .withFailureHandler(function (err) { showToast('Error', err.message, 'danger'); })
@@ -1830,17 +1850,12 @@ function segarkanPelanggan(pilihId) {
     .getPelanggan(AppState.token, '');
 }
 
-function segarkanDropdownPelanggan(pilihId) {
-  const sel = $('invPelanggan');
-  if (!sel) return;
-  const sebelumnya = sel.value;
-  sel.innerHTML = '<option value="">— Pilih pelanggan —</option>' +
-    AppState.pelanggan.map(function (p) {
-      return '<option value="' + esc(p.ID) + '">' + esc(p.Nama) + '</option>';
-    }).join('');
-  sel.value = pilihId || sebelumnya;
-  tampilkanInfoPelanggan();
-  simpanDraft();
+function segarkanDropdownPelanggan(pilihId) {   // v3.3: kolom cari pelanggan
+  const inp = $('invPelanggan');
+  if (!inp) return;
+  const id = pilihId || inp.value;
+  if (id && AppState.pelanggan.some(function (p) { return p.ID === id; })) pilihPelangganInvoice(id);
+  else { tampilkanInfoPelanggan(); simpanDraft(); }
 }
 
 function hapusPelangganUI(id, nama) {
@@ -2622,10 +2637,11 @@ function muatBootLatar() {
 /** Ambil data menu lain di latar, satu per satu, supaya saat dibuka tidak ada loading. */
 function prefetchLatar() {
   const langkah = [];
-  if (!cacheMasihValid('invoice') && filterRiwayatBawaan()) langkah.push(function () { muatRiwayat(true); });
+  // v3.3: kesegaran dicek saat langkah dijalankan, supaya data yang baru saja dimuat halaman tidak diminta ulang
+  langkah.push(function () { if (!cacheMasihValid('invoice') && filterRiwayatBawaan()) muatRiwayat(true); });
   if (AppState.peran === 'Owner') {
-    if (!cacheMasihValid('laporan')) langkah.push(function () { muatLaporan(true); });
-    if (!cacheMasihValid('produk')) langkah.push(function () { muatLaporanProduk(true); });
+    langkah.push(function () { if (!cacheMasihValid('laporan')) muatLaporan(true); });
+    langkah.push(function () { if (!cacheMasihValid('produk')) muatLaporanProduk(true); });
   }
   if (typeof crmPrefetch === 'function') langkah.push(crmPrefetch);
   let i = 0;
@@ -2635,4 +2651,258 @@ function prefetchLatar() {
     setTimeout(jalan, 600);
   };
   setTimeout(jalan, 1200);
+}
+
+// ════════════════════════════════════════════════════════
+// v3.3: PILIH PELANGGAN (KETIK UNTUK MENCARI) & PELANGGAN BARU RINGKAS
+// ────────────────────────────────────────────────────────
+// Pencarian memakai daftar pelanggan yang sudah ada di browser (AppState.pelanggan,
+// dimuat saat aplikasi dibuka) — mengetik TIDAK memanggil server sama sekali.
+// ════════════════════════════════════════════════════════
+
+function namaPelangganById(id) {
+  const p = AppState.pelanggan.filter(function (x) { return x.ID === id; })[0];
+  return p ? p.Nama : '';
+}
+
+function htmlPilihPelanggan(idTerpilih) {
+  return '<div class="pel-combo">' +
+    '<input type="hidden" id="invPelanggan" value="' + esc(idTerpilih || '') + '">' +
+    '<div class="input-group">' +
+      '<span class="input-group-text"><i class="bi bi-search"></i></span>' +
+      '<input type="text" class="form-control" id="invPelangganCari" autocomplete="off" spellcheck="false" ' +
+        'placeholder="Ketik nama atau no. HP pelanggan..." value="' + esc(namaPelangganById(idTerpilih)) + '" ' +
+        'role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="invPelangganList" ' +
+        'oninput="cariPelangganInvoice(false)" onfocus="cariPelangganInvoice(true)" ' +
+        'onkeydown="tombolPelangganInvoice(event)" onblur="tutupDaftarPelanggan()">' +
+      '<button type="button" class="btn btn-ghost" id="invPelangganHapus" title="Kosongkan pilihan" ' +
+        'aria-label="Kosongkan pilihan pelanggan" onclick="kosongkanPelangganInvoice()"' +
+        (idTerpilih ? '' : ' hidden') + '><i class="bi bi-x-lg"></i></button>' +
+    '</div>' +
+    '<div class="pel-list" id="invPelangganList" role="listbox" hidden></div>' +
+  '</div>';
+}
+
+let _pelHasil = [], _pelAktif = -1;
+
+function cariPelangganInvoice(dariFokus) {
+  const inp = $('invPelangganCari'), hidden = $('invPelanggan'), list = $('invPelangganList');
+  if (!inp || !list) return;
+  const teks = inp.value.trim();
+  const namaTerpilih = namaPelangganById(hidden.value);
+  // Teks diubah → pilihan lama tidak berlaku lagi
+  if (!dariFokus && hidden.value && teks !== namaTerpilih) {
+    hidden.value = '';
+    $('invPelangganHapus').hidden = true;
+    tampilkanInfoPelanggan();
+    simpanDraft();
+  }
+  const q = (dariFokus && teks === namaTerpilih) ? '' : teks.toLowerCase();
+  const qDigit = q.replace(/[^\d]/g, '');
+  _pelHasil = AppState.pelanggan.filter(function (p) {
+    if (!q) return true;
+    if (String(p.Nama || '').toLowerCase().indexOf(q) !== -1) return true;
+    return qDigit.length >= 3 && String(p.Telepon || '').replace(/[^\d]/g, '').indexOf(qDigit) !== -1;
+  }).sort(function (a, b) {
+    const aw = String(a.Nama).toLowerCase().indexOf(q) === 0 ? 0 : 1;
+    const bw = String(b.Nama).toLowerCase().indexOf(q) === 0 ? 0 : 1;
+    return aw - bw || String(a.Nama).localeCompare(String(b.Nama));
+  }).slice(0, 50);
+  _pelAktif = _pelHasil.length && q ? 0 : -1;
+  gambarDaftarPelangganInvoice(teks, q);
+}
+
+function gambarDaftarPelangganInvoice(teks, q) {
+  const list = $('invPelangganList');
+  const persis = AppState.pelanggan.some(function (p) { return String(p.Nama).toLowerCase() === q; });
+  const tandai = function (nama) {
+    if (!q) return esc(nama);
+    const i = nama.toLowerCase().indexOf(q);
+    return i === -1 ? esc(nama) : esc(nama.slice(0, i)) + '<mark>' + esc(nama.slice(i, i + q.length)) + '</mark>' + esc(nama.slice(i + q.length));
+  };
+  list.innerHTML = (_pelHasil.length ? _pelHasil.map(function (p, i) {
+      return '<button type="button" class="pel-opsi' + (i === _pelAktif ? ' aktif' : '') + '" role="option" ' +
+        'id="pelOpsi' + i + '" onmousedown="event.preventDefault()" onclick="pilihPelangganInvoice(\'' + esc(p.ID) + '\')">' +
+        '<span class="pel-nama">' + tandai(String(p.Nama || '')) + '</span>' +
+        (p.Telepon ? '<span class="pel-hp">' + esc(p.Telepon) + '</span>' : '') + '</button>';
+    }).join('') : '<div class="pel-kosong">Tidak ada pelanggan bernama "' + esc(teks) + '".</div>') +
+    (teks && !persis ? '<button type="button" class="pel-opsi pel-tambah" onmousedown="event.preventDefault()" ' +
+      'onclick="bukaPelangganCepat($(\'invPelangganCari\').value.trim())"><i class="bi bi-person-plus"></i> ' +
+      'Tambah "' + esc(teks) + '" sebagai pelanggan baru</button>' : '');
+  list.hidden = false;
+  $('invPelangganCari').setAttribute('aria-expanded', 'true');
+}
+
+function tombolPelangganInvoice(e) {
+  const list = $('invPelangganList');
+  if (!list || list.hidden) { if (e.key === 'ArrowDown') cariPelangganInvoice(true); return; }
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (!_pelHasil.length) return;
+    _pelAktif = (_pelAktif + (e.key === 'ArrowDown' ? 1 : -1) + _pelHasil.length) % _pelHasil.length;
+    const opsi = list.querySelectorAll('.pel-opsi:not(.pel-tambah)');
+    for (let i = 0; i < opsi.length; i++) opsi[i].classList.toggle('aktif', i === _pelAktif);
+    if (opsi[_pelAktif]) opsi[_pelAktif].scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (_pelAktif >= 0 && _pelHasil[_pelAktif]) pilihPelangganInvoice(_pelHasil[_pelAktif].ID);
+  } else if (e.key === 'Escape') {
+    tutupDaftarPelanggan(true);
+  }
+}
+
+function tutupDaftarPelanggan(segera) {
+  const tutup = function () {
+    const list = $('invPelangganList'), inp = $('invPelangganCari');
+    if (list) list.hidden = true;
+    if (inp) inp.setAttribute('aria-expanded', 'false');
+  };
+  if (segera) tutup(); else setTimeout(tutup, 120);
+}
+
+function pilihPelangganInvoice(id) {
+  const hidden = $('invPelanggan'), inp = $('invPelangganCari');
+  if (!hidden || !inp) return;
+  hidden.value = id;
+  inp.value = namaPelangganById(id);
+  $('invPelangganHapus').hidden = !id;
+  tutupDaftarPelanggan(true);
+  tampilkanInfoPelanggan();
+  simpanDraft();
+}
+
+function kosongkanPelangganInvoice() {
+  $('invPelanggan').value = '';
+  $('invPelangganCari').value = '';
+  $('invPelangganHapus').hidden = true;
+  tampilkanInfoPelanggan();
+  simpanDraft();
+  $('invPelangganCari').focus();
+}
+
+/** Form ringkas "Tambah Pelanggan Baru": hanya Nama & No. HP/WhatsApp, lalu langsung dipilih. */
+function bukaPelangganCepat(namaAwal) {
+  if (!$('pelCepatModal')) {
+    const div = document.createElement('div');
+    div.innerHTML =
+      '<div class="modal fade" id="pelCepatModal" tabindex="-1" aria-labelledby="pelCepatJudul">' +
+        '<div class="modal-dialog modal-dialog-centered modal-sm-plus"><div class="modal-content">' +
+          '<div class="modal-header"><h5 class="modal-title" id="pelCepatJudul">' +
+            '<i class="bi bi-person-plus text-success"></i> Tambah Pelanggan Baru</h5>' +
+            '<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button></div>' +
+          '<form class="modal-body" id="pelCepatForm" onsubmit="event.preventDefault(); simpanPelangganCepat();">' +
+            '<label class="form-label" for="pelCepatNama">Nama Pelanggan <span class="req">*</span></label>' +
+            '<input type="text" class="form-control mb-3" id="pelCepatNama" autocomplete="off" maxlength="100">' +
+            '<label class="form-label" for="pelCepatHp">No. HP / No. WhatsApp</label>' +
+            '<input type="tel" class="form-control" id="pelCepatHp" inputmode="tel" autocomplete="off" placeholder="0812-3456-7890" maxlength="30">' +
+            '<div class="alert alert-danger py-2 small mt-3 mb-0 d-none" id="pelCepatError"></div>' +
+            '<div class="pel-cepat-info mt-3">Pelanggan otomatis tersimpan di menu <strong>Pelanggan</strong> dan bisa dipakai di seluruh aplikasi.</div>' +
+            '<button type="submit" hidden></button>' +
+          '</form>' +
+          '<div class="modal-footer">' +
+            '<button type="button" class="btn btn-ghost" data-bs-dismiss="modal">Batal</button>' +
+            '<button type="button" class="btn btn-whatsapp" id="pelCepatSimpan" onclick="simpanPelangganCepat()">' +
+              '<i class="bi bi-check-lg"></i> Simpan &amp; Pilih</button>' +
+          '</div>' +
+        '</div></div></div>';
+    document.body.appendChild(div.firstChild);
+  }
+  tutupDaftarPelanggan(true);
+  $('pelCepatNama').value = namaAwal || '';
+  $('pelCepatHp').value = '';
+  $('pelCepatNama').classList.remove('is-invalid');
+  $('pelCepatError').classList.add('d-none');
+  bootstrap.Modal.getOrCreateInstance($('pelCepatModal')).show();
+  setTimeout(function () { (namaAwal ? $('pelCepatHp') : $('pelCepatNama')).focus(); }, 300);
+}
+
+let _simpanPelangganCepat = false;
+function simpanPelangganCepat() {
+  if (_simpanPelangganCepat) return;   // klik ganda diabaikan
+  const nama = $('pelCepatNama').value.trim();
+  const hp = $('pelCepatHp').value.trim();
+  const galat = $('pelCepatError');
+  if (!nama) {
+    $('pelCepatNama').classList.add('is-invalid');
+    galat.textContent = 'Nama pelanggan wajib diisi.';
+    galat.classList.remove('d-none');
+    $('pelCepatNama').focus();
+    return;
+  }
+  // Nama & nomor sama persis sudah terdaftar → cukup pilih yang lama (tidak membuat data ganda)
+  const sama = AppState.pelanggan.filter(function (p) {
+    return String(p.Nama).trim().toLowerCase() === nama.toLowerCase() &&
+      String(p.Telepon || '').replace(/[^\d]/g, '') === hp.replace(/[^\d]/g, '');
+  })[0];
+  if (sama) {
+    bootstrap.Modal.getOrCreateInstance($('pelCepatModal')).hide();
+    pilihPelangganInvoice(sama.ID);
+    showToast('Info', '"' + sama.Nama + '" sudah terdaftar dan langsung dipilih.', 'info');
+    return;
+  }
+  _simpanPelangganCepat = true;
+  const selesai = tombolSibuk($('pelCepatSimpan'), 'Menyimpan...');
+  google.script.run
+    .withSuccessHandler(function (res) {
+      _simpanPelangganCepat = false;
+      selesai();
+      if (!res.success) {
+        if (String(res.message).indexOf('SESSION_INVALID') !== -1) { keluarPaksa(); return; }
+        galat.textContent = res.message;
+        galat.classList.remove('d-none');
+        return;
+      }
+      // Tanpa permintaan tambahan ke server: pelanggan baru langsung masuk daftar di browser
+      AppState.pelanggan.push({ ID: String(res.data.ID), Nama: nama, Email: '', Telepon: hp, Alamat: '', Catatan: '' });
+      AppState.pelanggan.sort(function (a, b) { return String(a.Nama).localeCompare(String(b.Nama)); });
+      bootstrap.Modal.getOrCreateInstance($('pelCepatModal')).hide();
+      showToast('Berhasil', 'Pelanggan "' + nama + '" disimpan dan dipilih.', 'success');
+      if (AppState.halaman === 'buatInvoice') pilihPelangganInvoice(String(res.data.ID));
+      else if (AppState.halaman === 'pelanggan') gambarPelanggan(AppState.pelanggan);
+    })
+    .withFailureHandler(function (err) {
+      _simpanPelangganCepat = false;
+      selesai();
+      galat.textContent = 'Gagal menghubungi server: ' + err.message;
+      galat.classList.remove('d-none');
+    })
+    .simpanPelanggan(AppState.token, { Nama: nama, Telepon: hp });
+}
+
+// ════════════════════════════════════════════════════════
+// v3.3: ANTI-DOBEL & FILTER STATUS
+// ════════════════════════════════════════════════════════
+
+function idAcak() {
+  try { if (window.crypto && crypto.randomUUID) return crypto.randomUUID(); } catch (e) {}
+  return 'k' + Date.now().toString(36) + Math.random().toString(36).slice(2, 12);
+}
+
+/** Kunci yang sama selama isi invoice belum diubah; berganti bila isinya diubah. */
+function kunciIdemInvoice(d, payload) {
+  const sidik = JSON.stringify(payload);
+  if (!d.kunciSimpan || d.sidikSimpan !== sidik) { d.kunciSimpan = idAcak(); d.sidikSimpan = sidik; }
+  simpanLokal(KUNCI_DRAFT, d);
+  return d.kunciSimpan;
+}
+
+function kunciFilterRiwayat() {
+  return AppState.filter.status + '|' + String(AppState.filter.keyword || '').trim().toLowerCase();
+}
+
+/** Saat chip status diklik: tampilkan langsung daftar yang sesuai status itu (tanpa daftar status lain tercampur). */
+function tampilkanFilterInstan() {
+  const wadah = $('listInvoice');
+  if (!wadah) return;
+  const peta = AppState.cacheRiwayatFilter || {};
+  const tersimpan = peta[kunciFilterRiwayat()];
+  if (tersimpan) { gambarRiwayat(tersimpan); return; }
+  const semua = peta['Semua|' + String(AppState.filter.keyword || '').trim().toLowerCase()];
+  if (semua && !semua.adaLagi) {
+    const st = AppState.filter.status;
+    const list = st === 'Semua' ? semua.list : semua.list.filter(function (r) { return r.StatusTampil === st; });
+    gambarRiwayat({ list: list, adaLagi: false, totalCocok: list.length, ringkas: semua.ringkas });
+    return;
+  }
+  wadah.innerHTML = skeleton(3);   // belum ada data yang pasti benar untuk status ini
 }

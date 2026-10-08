@@ -111,3 +111,24 @@
   .bl-baris small { grid-column: 1 / -1; }
 }
 @media (prefers-reduced-motion: reduce) { .progress-x span { transition: none; } }
+
+/* ── v3.3: Buat Invoice — cari pelanggan & form pelanggan ringkas ── */
+.pel-combo { position: relative; }
+.pel-list {
+  position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 30;
+  max-height: 280px; overflow-y: auto; background: var(--surface-card);
+  border: 1px solid var(--border-strong); border-radius: var(--r-card); box-shadow: var(--shadow-paper);
+}
+.pel-opsi {
+  display: flex; justify-content: space-between; align-items: center; gap: .75rem; width: 100%;
+  border: 0; background: none; text-align: left; padding: .55rem .75rem; font-size: 14px; color: var(--text-primary);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.pel-opsi:hover, .pel-opsi.aktif { background: var(--surface-subtle); }
+.pel-opsi mark { background: var(--due-bg); color: inherit; padding: 0; border-radius: 2px; }
+.pel-hp { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+.pel-nama { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pel-tambah { color: var(--paid-text); font-weight: 600; justify-content: flex-start; }
+.pel-kosong { padding: .6rem .75rem; font-size: 13px; color: var(--text-muted); }
+.pel-cepat-info { font-size: 12px; color: var(--text-muted); background: var(--surface-subtle); border-radius: var(--r-base); padding: .6rem .75rem; }
+.modal-sm-plus { max-width: 380px; }

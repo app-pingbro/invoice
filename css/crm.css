@@ -60,7 +60,8 @@
 /* Detail */
 .crm-info { display: grid; gap: .35rem; font-size: 13px; }
 .crm-info > div { display: grid; grid-template-columns: 120px 1fr; gap: .5rem; align-items: baseline; }
-.crm-info span:first-child { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
+.crm-info > div.alert-crm { display: block; }
+.crm-info > div > span:first-child { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
 .crm-sub, .crm-h2 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); margin: .5rem 0; }
 .alert-crm { font-size: 13px; padding: .55rem .75rem; border-radius: var(--r-base); background: var(--surface-subtle); border: 1px solid var(--border-subtle); color: var(--text-body); }
 .alert-kuning { background: var(--due-bg); border-color: var(--due-border); color: var(--due-text); }

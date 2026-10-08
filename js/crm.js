@@ -1006,7 +1006,12 @@ function cekPerangkatUI(btn) {
     const d = res.data;
     $('pwPerangkat').innerHTML = '<div class="crm-info">' +
       '<div><span>Nomor</span>' + esc(d.nomor || '-') + '</div>' +
-      '<div><span>Status</span>' + (d.status === 'connect' ? '<span class="text-success fw-bold">Terhubung</span>' : '<span class="text-magenta fw-bold">' + esc(d.status || 'tidak terhubung') + '</span> — scan ulang QR di fonnte.com') + '</div>' +
+      '<div><span>Status</span>' + (d.status === 'connect' ? '<span class="text-success fw-bold">Terhubung</span>' :
+        '<span><span class="text-magenta fw-bold">Terputus</span> (' + esc(d.status || '-') + ')</span>') + '</div>' +
+      (d.status === 'connect' ? '' :
+        '<div class="alert-crm alert-kuning mt-1"><i class="bi bi-qr-code-scan"></i> WhatsApp belum tersambung ke Fonnte, jadi pesan belum bisa dikirim. ' +
+        'Buka <strong>fonnte.com → Device → Connect</strong>, lalu scan QR dari HP nomor ' + esc(d.nomor || 'usaha Anda') +
+        ' (WhatsApp → Perangkat tertaut → Tautkan perangkat). Setelah itu klik <strong>Cek perangkat</strong> lagi.</div>') +
       '<div><span>Paket</span>' + esc(d.paket || '-') + ' · kuota ' + esc(d.kuota || '-') + '</div>' +
       '<div><span>Berlaku s/d</span>' + esc(d.kedaluwarsa || '-') + '</div></div>';
   }, { selesai: selesai });
@@ -1016,7 +1021,10 @@ function kirimTesUI(btn) {
   const no = $('pwTesNo').value.trim();
   if (!no) { $('pwTesNo').focus(); return; }
   const selesai = tombolSibuk(btn, '...');
-  crmApi('kirimTesWA', [no], function (res) { showToast('Terkirim', res.message, 'success'); }, { selesai: selesai });
+  crmApi('kirimTesWA', [no], function (res) { showToast('Terkirim', res.message, 'success'); }, {
+    selesai: selesai,
+    gagal: function () { if ($('pwPerangkat') && !$('pwPerangkat').innerHTML) cekPerangkatUI(document.createElement('button')); }   // tampilkan penyebabnya
+  });
 }
 
 // ════════════════════════════════════════════════════════

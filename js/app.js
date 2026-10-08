@@ -63,12 +63,14 @@ const MENU = {
     { id: 'buatInvoice',    ikon: 'bi-file-earmark-plus', label: 'Buat Invoice' },
     { id: 'riwayatInvoice', ikon: 'bi-clock-history',     label: 'Riwayat Invoice' },
     { id: 'pelanggan',      ikon: 'bi-people',            label: 'Pelanggan' },
+    { id: 'crm',            ikon: 'bi-person-lines-fill', label: 'CRM' },          // v3.2
     { id: 'laporan',        ikon: 'bi-bar-chart',         label: 'Laporan' }
   ],
   Tim: [
     { id: 'buatInvoice',    ikon: 'bi-file-earmark-plus', label: 'Buat Invoice' },
     { id: 'riwayatInvoice', ikon: 'bi-clock-history',     label: 'Riwayat Invoice' },
-    { id: 'pelanggan',      ikon: 'bi-people',            label: 'Pelanggan' }
+    { id: 'pelanggan',      ikon: 'bi-people',            label: 'Pelanggan' },
+    { id: 'crm',            ikon: 'bi-person-lines-fill', label: 'CRM' }           // v3.2
   ]
 };
 
@@ -238,6 +240,7 @@ function navigateTo(halaman) {
     case 'pelanggan':      renderPelanggan();      break;
     case 'laporan':        renderLaporan();        break;
     case 'pengaturan':     renderPengaturan();     break;
+    case 'crm':            renderCrm();            break;   // v3.2 (js/crm.js)
     default:               renderRiwayatInvoice();
   }
 }

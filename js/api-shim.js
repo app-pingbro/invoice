@@ -122,7 +122,11 @@ function panggilApiTurbo(namaAction, args) {
   const t0 = performance.now();
   if (!amanDicobaUlang(namaAction)) {
     _epochTulis++;
-    return panggilApi(namaAction, args, 0).then(function (json) { Perf.catat(namaAction, t0, json, false); return json; });
+    return panggilApi(namaAction, args, 0).then(function (json) {
+      Perf.catat(namaAction, t0, json, false);
+      if (json && json.nq > 0) jadwalkanKirimNotif(args && args[0]);   // v3.2: ada notifikasi WA di antrean
+      return json;
+    });
   }
   let kunci;
   try { kunci = _epochTulis + '|' + namaAction + '|' + JSON.stringify(args); } catch (e) { kunci = null; }
@@ -136,6 +140,21 @@ function panggilApiTurbo(namaAction, args) {
     janji.then(hapus, hapus);
   }
   return janji.then(function (json) { Perf.catat(namaAction, t0, json, false); return salinJson(json); });
+}
+
+/* v3.2 — Notifikasi WhatsApp: server hanya memasukkan pesan ke antrean (simpan invoice
+ * tetap cepat). Beberapa saat kemudian browser meminta server mengirim antrean itu.
+ * Bila halaman keburu ditutup, trigger server (tiap 5 menit) yang mengirimnya. */
+let _timerNotif = null;
+function jadwalkanKirimNotif(token, ulangKe) {
+  if (!token) return;
+  clearTimeout(_timerNotif);
+  _timerNotif = setTimeout(function () {
+    panggilApi('kirimAntrianNotif', [token], 0).then(function (json) {
+      const sisa = json && json.data ? json.data.sisa : 0;
+      if (sisa > 0 && (ulangKe || 0) < 3) jadwalkanKirimNotif(token, (ulangKe || 0) + 1);
+    }).catch(function () { /* trigger server akan mengirimnya */ });
+  }, 1500);
 }
 
 /** Panaskan cache server saat layar login (belum ada token). Tidak mengirim data apa pun. */

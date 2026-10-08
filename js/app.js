@@ -207,6 +207,7 @@ function tanganiGagal(pesan, idWadah) {
 }
 
 function keluarPaksa(pesan) {
+  hapusCacheInstan();   // v3.2.2
   AppState.token = null; AppState.peran = null; AppState.nama = null;
   hapusLokal(KUNCI_TOKEN);
   sembunyikanNavigasi();
@@ -432,6 +433,16 @@ function terapkanIdentitas() {
 }
 
 function muatDataAwal(halamanAwal, sambutan) {
+  // v3.2.2: sesi yang dipulihkan (buka ulang / refresh) langsung tampil dari data
+  // tersimpan di browser, lalu disegarkan diam-diam di latar — tanpa layar loading.
+  const bootLokal = sambutan ? null : bacaCacheInstan('boot');
+  if (bootLokal) {
+    terapkanBoot(bootLokal, false);
+    pulihkanCacheInstan();
+    navigateTo(halamanAwal || (AppState.peran === 'Owner' ? 'laporan' : 'riwayatInvoice'));
+    muatBootLatar();
+    return;
+  }
   $('app-container').innerHTML = '<div class="pt-3">' + skeleton(3) + '</div>';
   google.script.run
     .withSuccessHandler(function (res) {
@@ -440,20 +451,13 @@ function muatDataAwal(halamanAwal, sambutan) {
         tampilkanGalat('app-container', res.message);
         return;
       }
-      AppState.config          = res.data.config || {};
-      AppState.satuanList      = res.data.satuanList || [];
-      AppState.pelanggan       = res.data.pelanggan || [];
-      AppState.nomorBerikutnya = res.data.nomorBerikutnya || '';
-      AppState.nama            = res.data.user.nama;
-      AppState.peran           = res.data.user.peran;
-
-      terapkanIdentitasAplikasi();
-      terapkanIdentitas();
-      renderNavigasi(AppState.peran);
+      terapkanBoot(res.data, true);
+      simpanCacheInstan('boot', res.data);
       AppState.draft = bacaLokal(KUNCI_DRAFT, true);
 
       if (sambutan) showToast('Selamat Datang', 'Halo, ' + AppState.nama + '!', 'success');
       navigateTo(halamanAwal || (AppState.peran === 'Owner' ? 'laporan' : 'riwayatInvoice'));
+      prefetchLatar();
     })
     .withFailureHandler(function (err) {
       tampilkanGalat('app-container', 'Gagal memuat data awal: ' + err.message);
@@ -465,6 +469,7 @@ function handleLogout() {
   konfirmasi('Keluar dari aplikasi sekarang? Draf invoice yang belum disimpan akan dihapus.',
     function () {
       const token = AppState.token;
+      hapusCacheInstan();   // v3.2.2
       AppState.token = null; AppState.peran = null; AppState.nama = null;
       AppState.draft = null; AppState.cacheInvoice = null;
       AppState.cacheLaporan = null; AppState.chart = {};
@@ -1145,6 +1150,7 @@ function muatRiwayat(diamDiam) {
       }
       AppState.cacheInvoice = res.data;
       tandaiCacheSegar('invoice');
+      if (filterRiwayatBawaan()) simpanCacheInstan('invoice', res.data);   // v3.2.2
       gambarRiwayat(res.data);
     })
     .withFailureHandler(function (err) {
@@ -1896,6 +1902,7 @@ function muatLaporan(diamDiam) {
       }
       AppState.cacheLaporan = res.data;
       tandaiCacheSegar('laporan');
+      simpanCacheInstan('laporan', res.data);   // v3.2.2
       gambarLaporan(res.data);
     })
     .withFailureHandler(function (err) {
@@ -2111,7 +2118,7 @@ function terapkanPeriodeCustomProduk() {
 
 function muatLaporanProduk(diamDiam) {
   const f = AppState.filterProduk;
-  if (!diamDiam) $('listLaporanProduk').innerHTML = skeleton(2);
+  if (!diamDiam && $('listLaporanProduk')) $('listLaporanProduk').innerHTML = skeleton(2);   // v3.2.2: aman bila halaman sudah berpindah
 
   google.script.run
     .withSuccessHandler(function (res) {
@@ -2123,6 +2130,7 @@ function muatLaporanProduk(diamDiam) {
       }
       AppState.cacheProduk = res.data;
       tandaiCacheSegar('produk');
+      if (f.periode === 'bulan') simpanCacheInstan('produk', res.data);   // v3.2.2
       gambarLaporanProduk(res.data);
     })
     .withFailureHandler(function (err) {
@@ -2524,3 +2532,107 @@ document.addEventListener('DOMContentLoaded', function () {
   overlay.style.opacity = '0';
   setTimeout(function () { overlay.style.display = 'none'; }, 300);
 });
+
+// ════════════════════════════════════════════════════════
+// v3.2.2: PERPINDAHAN MENU TANPA LOADING
+// ────────────────────────────────────────────────────────
+// 1. Data tiap menu disimpan di browser (localStorage) dan hanya berlaku
+//    untuk token login yang sama. Saat aplikasi dibuka ulang, halaman
+//    langsung tampil dari data itu, lalu disegarkan diam-diam di latar.
+// 2. Setelah masuk, data menu lain (Riwayat, Laporan, CRM) diambil di
+//    latar satu per satu, sehingga saat menu dibuka datanya sudah siap.
+// 3. Semua aksi simpan/hapus tetap memaksa data segar seperti sebelumnya.
+// Data tersimpan dihapus saat Keluar / sesi berakhir.
+// ════════════════════════════════════════════════════════
+
+const KUNCI_CACHE_INSTAN = 'invoisku-cache-v1';
+
+function bacaCacheInstan(bagian) {
+  const c = bacaLokal(KUNCI_CACHE_INSTAN, true);
+  if (!c || !AppState.token || c.token !== AppState.token) return null;
+  return c[bagian] || null;
+}
+
+function simpanCacheInstan(bagian, data) {
+  if (!AppState.token) return;
+  let c = bacaLokal(KUNCI_CACHE_INSTAN, true);
+  if (!c || c.token !== AppState.token) c = { token: AppState.token };
+  c[bagian] = data;
+  simpanLokal(KUNCI_CACHE_INSTAN, c);
+}
+
+function hapusCacheInstan() {
+  hapusLokal(KUNCI_CACHE_INSTAN);
+  AppState.cacheInvoice = null; AppState.cacheLaporan = null; AppState.cacheProduk = null;
+  AppState.cacheWaktu = {};
+  if (typeof crmResetCache === 'function') crmResetCache();
+}
+
+/** Isi cache memori dari data tersimpan (dianggap lama → tetap disegarkan di latar saat menu dibuka). */
+function pulihkanCacheInstan() {
+  AppState.cacheInvoice = bacaCacheInstan('invoice') || AppState.cacheInvoice;
+  AppState.cacheLaporan = bacaCacheInstan('laporan') || AppState.cacheLaporan;
+  AppState.cacheProduk  = bacaCacheInstan('produk')  || AppState.cacheProduk;
+  if (typeof crmPulihkanCache === 'function') crmPulihkanCache();
+}
+
+function filterRiwayatBawaan() {
+  return !String(AppState.filter.keyword || '').trim() && AppState.filter.status === 'Semua';
+}
+
+/** Terapkan hasil getBootstrapData ke AppState & tampilan kepala. */
+function terapkanBoot(data, segar) {
+  const peranLama = AppState.peran;
+  AppState.config          = data.config || {};
+  AppState.satuanList      = data.satuanList || [];
+  AppState.pelanggan       = data.pelanggan || [];
+  AppState.nomorBerikutnya = data.nomorBerikutnya || '';
+  AppState.nama            = data.user.nama;
+  AppState.peran           = data.user.peran;
+  if (segar) tandaiCacheSegar('pelanggan');
+  terapkanIdentitasAplikasi();
+  terapkanIdentitas();
+  if (peranLama !== AppState.peran) renderNavigasi(AppState.peran);
+  if (AppState.halaman) perbaruiNavAktif(AppState.halaman);
+}
+
+/** Segarkan data awal di latar (sesi dipulihkan dari cache browser). */
+function muatBootLatar() {
+  AppState.draft = bacaLokal(KUNCI_DRAFT, true);
+  google.script.run
+    .withSuccessHandler(function (res) {
+      if (!res.success) {
+        if (String(res.message).indexOf('SESSION_INVALID') !== -1) { hapusCacheInstan(); keluarPaksa('Sesi berakhir, silakan masuk kembali.'); }
+        return;
+      }
+      const nomorLama = AppState.nomorBerikutnya;
+      terapkanBoot(res.data, true);
+      simpanCacheInstan('boot', res.data);
+      // Nomor invoice pratinjau ikut diperbarui bila formulir belum diubah ke mode edit
+      const d = AppState.draft;
+      if (d && !d.editId && d.nomor === nomorLama) d.nomor = AppState.nomorBerikutnya;
+      const inp = $('invNomor');
+      if (inp && (!d || !d.editId) && inp.value === nomorLama) inp.value = AppState.nomorBerikutnya;
+      prefetchLatar();
+    })
+    .withFailureHandler(function () { /* tetap pakai data tersimpan; dicoba lagi saat pindah menu */ })
+    .getBootstrapData(AppState.token);
+}
+
+/** Ambil data menu lain di latar, satu per satu, supaya saat dibuka tidak ada loading. */
+function prefetchLatar() {
+  const langkah = [];
+  if (!cacheMasihValid('invoice') && filterRiwayatBawaan()) langkah.push(function () { muatRiwayat(true); });
+  if (AppState.peran === 'Owner') {
+    if (!cacheMasihValid('laporan')) langkah.push(function () { muatLaporan(true); });
+    if (!cacheMasihValid('produk')) langkah.push(function () { muatLaporanProduk(true); });
+  }
+  if (typeof crmPrefetch === 'function') langkah.push(crmPrefetch);
+  let i = 0;
+  const jalan = function () {
+    if (i >= langkah.length || !AppState.token) return;
+    try { langkah[i++](); } catch (e) { console.warn('[InvoisKu] prefetch:', e); }
+    setTimeout(jalan, 600);
+  };
+  setTimeout(jalan, 1200);
+}

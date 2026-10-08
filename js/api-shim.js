@@ -226,11 +226,15 @@ function buatRunnerGoogleScript() {
           return proxy;
         }
 
-        panggilApiTurbo(prop, args)
-          .then(function (json) { onSukses(json); })
-          .catch(function (err) {
-            onGagal({ message: (err && err.message) ? err.message : String(err) });
-          });
+        panggilApiTurbo(prop, args).then(function (json) {
+          // v3.2.2: bila pengguna sudah pindah menu sebelum data datang, penangan tampilan bisa
+          // gagal menulis ke elemen yang sudah tidak ada. Itu bukan kegagalan server — cukup
+          // dicatat di Console, tidak ditampilkan sebagai pesan "Gagal".
+          try { onSukses(json); }
+          catch (e) { console.warn('[InvoisKu] Tampilan ' + prop + ' dilewati (halaman sudah berpindah?):', e); }
+        }, function (err) {
+          onGagal({ message: (err && err.message) ? err.message : String(err) });
+        });
 
         return proxy;
       };

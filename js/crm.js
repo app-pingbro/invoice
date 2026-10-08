@@ -162,10 +162,48 @@ function crmSetFilter(k, v) {
   muatKontak();
 }
 
+function crmFilterBawaan() {
+  const f = CRM.filter;
+  return !f.cari && !f.segmen && !f.tag && !f.statusWA && !f.masalah && !f.optOut && (f.halaman || 1) === 1;
+}
+
+// ─── v3.2.2: data CRM disiapkan di latar & disimpan di browser (tanpa loading) ──
+function crmResetCache() {
+  CRM.data = null; CRM.dataWaktu = 0; CRM.config = null; CRM.daftarBlast = null; CRM.antrean = null;
+  CRM.dipilih = {}; CRM.audiens = null; hentikanOtomatis();
+}
+
+function crmPulihkanCache() {
+  if (typeof bacaCacheInstan !== 'function') return;
+  if (crmFilterBawaan()) CRM.data = bacaCacheInstan('crm') || CRM.data;   // dataWaktu 0 → tetap disegarkan saat dibuka
+  if (crmOwner()) {
+    CRM.config = bacaCacheInstan('crmConfig') || CRM.config;
+    CRM.daftarBlast = bacaCacheInstan('crmBlast') || CRM.daftarBlast;
+  }
+}
+
+/** Dipanggil prefetchLatar() di app.js setelah masuk. Tidak menggambar apa pun bila menu CRM tidak sedang dibuka. */
+function crmPrefetch() {
+  if (!CRM.data || Date.now() - CRM.dataWaktu > CACHE_TTL_MS) {
+    if (crmFilterBawaan()) muatKontak();
+  }
+  if (!crmOwner()) return;
+  setTimeout(function () {
+    crmApi('getNotifConfig', [], function (res) { CRM.config = res.data; simpanCacheInstan('crmConfig', res.data); });
+  }, 600);
+  setTimeout(function () {
+    crmApi('getDaftarBlast', [], function (res) { CRM.daftarBlast = res.data; simpanCacheInstan('crmBlast', res.data); });
+  }, 1200);
+  setTimeout(function () {
+    crmApi('getAntrianNotif', [{ status: '' }], function (res) { if (!CRM.antrean) CRM.antrean = { f: '', d: res.data }; });
+  }, 1800);
+}
+
 function muatKontak() {
   crmApi('getCrmKontak', [CRM.filter], function (res) {
     CRM.data = res.data; CRM.dataWaktu = Date.now();
-    if (res.data.sinkron && (res.data.sinkron.ditambah || res.data.sinkron.diperbarui)) {
+    if (crmFilterBawaan() && typeof simpanCacheInstan === 'function') simpanCacheInstan('crm', res.data);
+    if (AppState.halaman === 'crm' && res.data.sinkron && (res.data.sinkron.ditambah || res.data.sinkron.diperbarui)) {
       showToast('CRM', 'Sinkron otomatis: ' + res.data.sinkron.ditambah + ' kontak baru, ' + res.data.sinkron.diperbarui + ' diperbarui.', 'info');
     }
     if (AppState.halaman === 'crm' && CRM.tab === 'kontak') gambarKontak(res.data);
@@ -662,7 +700,7 @@ function renderBlast() {
     '</div>' +
     '<div class="card-x mt-3"><div class="card-x-head"><h2>Riwayat blast</h2>' +
       '<button class="btn btn-ghost btn-sm" onclick="muatDaftarBlast()"><i class="bi bi-arrow-clockwise"></i></button></div>' +
-      '<div class="card-x-body" id="blRiwayat">' + skeleton(2) + '</div></div>';
+      '<div class="card-x-body" id="blRiwayat">' + (CRM.daftarBlast ? '' : skeleton(2)) + '</div></div>';
 
   if ($('blSegmen')) $('blSegmen').onchange = function () {
     $('blManualWadah').classList.toggle('d-none', this.value !== '__manual');
@@ -671,7 +709,8 @@ function renderBlast() {
   if (!CRM.config) crmApi('getNotifConfig', [], function (res) { CRM.config = res.data; peringatanBlast(); });
   else peringatanBlast();
   if (CRM.audiens) gambarAudiens();
-  muatDaftarBlast();
+  if (CRM.daftarBlast) gambarDaftarBlast();   // tampil instan dari data terakhir
+  muatDaftarBlast();                          // lalu disegarkan diam-diam
 }
 
 function peringatanBlast() {
@@ -791,13 +830,14 @@ function mulaiBlast() {
 function muatDaftarBlast() {
   crmApi('getDaftarBlast', [], function (res) {
     CRM.daftarBlast = res.data;
+    if (typeof simpanCacheInstan === 'function') simpanCacheInstan('crmBlast', res.data);
     gambarDaftarBlast();
-  }, { wadah: 'blRiwayat', ulang: 'muatDaftarBlast()' });
+  }, { wadah: CRM.daftarBlast ? null : 'blRiwayat', ulang: 'muatDaftarBlast()' });
 }
 
 function gambarDaftarBlast() {
   const list = CRM.daftarBlast || [];
-  if (!$('blRiwayat')) return;
+  if (!$('blRiwayat') || !$('blastAktifWadah')) return;
   const aktif = list.filter(function (b) { return b.Status === 'Berjalan'; });
   $('blastAktifWadah').innerHTML = aktif.map(kartuBlastAktif).join('');
   $('blRiwayat').innerHTML = list.length ? '<div class="table-responsive"><table class="table-x"><thead><tr><th>Blast</th><th>Tanggal</th><th>Progres</th><th>Status</th></tr></thead><tbody>' +
@@ -881,13 +921,22 @@ function renderAntrean() {
     '</div>' +
     '<div id="antInfo"></div>' +
     '<div id="antList">' + skeleton(3) + '</div>';
+  if (CRM.antrean && CRM.antrean.f === filterAntrean) gambarAntrean(CRM.antrean.d);   // instan dari data terakhir
   muatAntrean();
 }
 
 function muatAntrean() {
+  const adaCache = CRM.antrean && CRM.antrean.f === filterAntrean;
   crmApi('getAntrianNotif', [{ status: filterAntrean }], function (res) {
-    const d = res.data, r = d.ringkas;
-    if (!$('antKpi')) return;
+    CRM.antrean = { f: filterAntrean, d: res.data };
+    gambarAntrean(res.data);
+  }, { wadah: adaCache ? null : 'antList', ulang: 'muatAntrean()' });
+}
+
+function gambarAntrean(d) {
+  {
+    const r = d.ringkas;
+    if (!$('antKpi') || !$('antList')) return;
     $('antKpi').innerHTML =
       '<div class="col-6 col-lg-3"><div class="kpi kpi-yellow"><div class="kpi-label"><span>Menunggu</span><i class="bi bi-hourglass"></i></div><div class="kpi-value">' + r.Antri + '</div></div></div>' +
       '<div class="col-6 col-lg-3"><div class="kpi kpi-green"><div class="kpi-label"><span>Terkirim</span><i class="bi bi-check2-all"></i></div><div class="kpi-value">' + r.Terkirim + '</div></div></div>' +
@@ -907,7 +956,7 @@ function muatAntrean() {
         '<div class="crm-pesan-potong">' + esc(x.Pesan) + '</div>' +
         (x.Respon && x.Status !== 'Terkirim' ? '<div class="inv-meta text-magenta">' + esc(x.Respon) + '</div>' : '') + '</div>';
     }).join('') : '<div class="card-x"><div class="empty-state"><i class="bi bi-send"></i>Belum ada pesan.</div></div>';
-  }, { wadah: 'antList', ulang: 'muatAntrean()' });
+  }
 }
 
 function labelEvent(e) {
@@ -930,10 +979,20 @@ function ulangiGagalUI(btn) {
 
 function renderPengaturanWA() {
   $('crmIsi').innerHTML = '<div id="pwIsi">' + skeleton(3) + '</div>';
-  crmApi('getNotifConfig', [], function (res) { CRM.config = res.data; gambarPengaturanWA(res.data); }, { wadah: 'pwIsi', ulang: 'renderPengaturanWA()' });
+  const adaCache = !!CRM.config;
+  if (adaCache) gambarPengaturanWA(CRM.config);   // instan dari data terakhir
+  crmApi('getNotifConfig', [], function (res) {
+    const berubah = JSON.stringify(res.data) !== JSON.stringify(CRM.config);
+    CRM.config = res.data;
+    if (typeof simpanCacheInstan === 'function') simpanCacheInstan('crmConfig', res.data);
+    // Jangan menimpa formulir yang sedang diisi pengguna
+    const sedangDiisi = $('pwIsi') && $('pwIsi').contains(document.activeElement) && document.activeElement !== document.body;
+    if (!adaCache || (berubah && !sedangDiisi)) gambarPengaturanWA(res.data);
+  }, { wadah: adaCache ? null : 'pwIsi', ulang: 'renderPengaturanWA()' });
 }
 
 function gambarPengaturanWA(c) {
+  if (!$('pwIsi')) return;   // halaman sudah berpindah
   $('pwIsi').innerHTML =
     '<div class="row g-3">' +
       '<div class="col-lg-5"><div class="card-x"><div class="card-x-head"><h2><i class="bi bi-whatsapp text-success"></i> WhatsApp (Fonnte)</h2></div><div class="card-x-body">' +
@@ -988,6 +1047,7 @@ function simpanPengaturanWA(tokenKhusus) {
   const selesai = tombolSibuk($('pwSimpan'), 'Menyimpan...');
   crmApi('simpanNotifConfig', [obj], function (res) {
     CRM.config = res.data;
+    if (typeof simpanCacheInstan === 'function') simpanCacheInstan('crmConfig', res.data);
     showToast('Tersimpan', res.message, 'success');
     gambarPengaturanWA(res.data);
   }, { selesai: selesai });
@@ -1004,6 +1064,7 @@ function cekPerangkatUI(btn) {
   const selesai = tombolSibuk(btn, 'Mengecek...');
   crmApi('cekPerangkatWA', [], function (res) {
     const d = res.data;
+    if (!$('pwPerangkat')) return;   // halaman sudah berpindah
     $('pwPerangkat').innerHTML = '<div class="crm-info">' +
       '<div><span>Nomor</span>' + esc(d.nomor || '-') + '</div>' +
       '<div><span>Status</span>' + (d.status === 'connect' ? '<span class="text-success fw-bold">Terhubung</span>' :
